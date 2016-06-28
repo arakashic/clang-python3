@@ -155,7 +155,11 @@ class _CXString(Structure):
     @staticmethod
     def from_result(res, fn, args):
         assert isinstance(res, _CXString)
-        return conf.lib.clang_getCString(res).decode('utf-8')
+        ret = conf.lib.clang_getCString(res)
+        if ret:
+            return ret.decode('utf-8')
+        else:
+            return ret
 
     @property
     def spelling(self):
@@ -3783,7 +3787,8 @@ def register_functions(lib, ignore_errors):
     def register(item):
         return register_function(lib, item, ignore_errors)
 
-    map(register, functionList)
+    for func in functionList:
+        register(func)
 
 class Config:
     library_path = None
