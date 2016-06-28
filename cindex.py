@@ -147,7 +147,7 @@ class CachedProperty(object):
 class _CXString(Structure):
     """Helper for transforming CXString results."""
 
-    _fields_ = [("spelling", c_char_p), ("free", c_int)]
+    _fields_ = [("_spelling", c_char_p), ("free", c_int)]
 
     def __del__(self):
         conf.lib.clang_disposeString(self)
@@ -155,7 +155,14 @@ class _CXString(Structure):
     @staticmethod
     def from_result(res, fn, args):
         assert isinstance(res, _CXString)
-        return conf.lib.clang_getCString(res)
+        return conf.lib.clang_getCString(res).decode('utf-8')
+
+    @property
+    def spelling(self):
+        if self._spelling:
+            return self._spelling.decode ('utf-8')
+        else:
+            return None
 
 class SourceLocation(Structure):
     """
@@ -397,7 +404,7 @@ class Diagnostic(object):
         disable = _CXString()
         conf.lib.clang_getDiagnosticOption(self, byref(disable))
 
-        return conf.lib.clang_getCString(disable)
+        return conf.lib.clang_getCString(disable).decode('utf-8')
 
     def __repr__(self):
         return "<Diagnostic severity %r, location %r, spelling %r>" % (
@@ -466,7 +473,7 @@ class TokenGroup(object):
 
         token_group = TokenGroup(tu, tokens_memory, tokens_count)
 
-        for i in xrange(0, count):
+        for i in range(0, count):
             token = Token()
             token.int_data = tokens_array[i].int_data
             token.ptr_data = tokens_array[i].ptr_data
@@ -513,7 +520,8 @@ class TokenKind(object):
         setattr(TokenKind, name, kind)
 
 ### Cursor Kinds ###
-class BaseEnumeration(object):
+
+class BaseEnumeration:
     """
     Common base class for named enumerations held in sync with Index.h values.
 
@@ -529,8 +537,8 @@ class BaseEnumeration(object):
         if value >= len(self.__class__._kinds):
             self.__class__._kinds += [None] * (value - len(self.__class__._kinds) + 1)
         if self.__class__._kinds[value] is not None:
-            raise ValueError,'{0} value {1} already loaded'.format(
-                str(self.__class__), value)
+            raise ValueError('{0} value {1} already loaded'.format(
+                str(self.__class__), value))
         self.value = value
         self.__class__._kinds[value] = self
         self.__class__._name_map = None
@@ -552,7 +560,7 @@ class BaseEnumeration(object):
     @classmethod
     def from_id(cls, id):
         if id >= len(cls._kinds) or cls._kinds[id] is None:
-            raise ValueError,'Unknown template argument kind %d' % id
+            raise ValueError ('Unknown template argument kind %d' % id)
         return cls._kinds[id]
 
     def __repr__(self):
@@ -571,7 +579,7 @@ class CursorKind(BaseEnumeration):
     @staticmethod
     def get_all_kinds():
         """Return all CursorKind enumeration instances."""
-        return filter(None, CursorKind._kinds)
+        return list (filter(None, CursorKind._kinds))
 
     def is_declaration(self):
         """Test if this is a declaration kind."""
@@ -1345,6 +1353,28 @@ class Cursor(Structure):
         return AccessSpecifier.from_id(self._access_specifier)
 
     @property
+    def storage_class(self):
+        """
+        Retrieves the storage class (if any) of the entity pointed at by the
+        cursor.
+        """
+        if not hasattr(self, '_storage_class'):
+            self._storage_class = conf.lib.clang_Cursor_getStorageClass(self)
+
+        return StorageClass.from_id(self._storage_class)
+
+    @property
+    def access_specifier(self):
+        """
+        Retrieves the access specifier (if any) of the entity pointed at by the
+        cursor.
+        """
+        if not hasattr(self, '_access_specifier'):
+            self._access_specifier = conf.lib.clang_getCXXAccessSpecifier(self)
+
+        return AccessSpecifier.from_id(self._access_specifier)
+
+    @property
     def type(self):
         """
         Retrieve the Type (if any) of the entity pointed at by the cursor.
@@ -1544,6 +1574,16 @@ class Cursor(Structure):
             for descendant in child.walk_preorder():
                 yield descendant
 
+    def walk_preorder(self):
+        """Depth-first preorder walk over the cursor and its descendants.
+
+        Yields cursors.
+        """
+        yield self
+        for child in self.get_children():
+            for descendant in child.walk_preorder():
+                yield descendant
+
     def get_tokens(self):
         """Obtain Token instances formulating that compose this Cursor.
 
@@ -1622,7 +1662,7 @@ class StorageClass(object):
         if value >= len(StorageClass._kinds):
             StorageClass._kinds += [None] * (value - len(StorageClass._kinds) + 1)
         if StorageClass._kinds[value] is not None:
-            raise ValueError,'StorageClass already loaded'
+            raise ValueError('StorageClass already loaded')
         self.value = value
         StorageClass._kinds[value] = self
         StorageClass._name_map = None
@@ -1643,7 +1683,80 @@ class StorageClass(object):
     @staticmethod
     def from_id(id):
         if id >= len(StorageClass._kinds) or not StorageClass._kinds[id]:
-            raise ValueError,'Unknown storage class %d' % id
+            raise ValueError('Unknown storage class %d' % id)
+        return StorageClass._kinds[id]
+
+    def __repr__(self):
+        return 'StorageClass.%s' % (self.name,)
+
+StorageClass.INVALID = StorageClass(0)
+StorageClass.NONE = StorageClass(1)
+StorageClass.EXTERN = StorageClass(2)
+StorageClass.STATIC = StorageClass(3)
+StorageClass.PRIVATEEXTERN = StorageClass(4)
+StorageClass.OPENCLWORKGROUPLOCAL = StorageClass(5)
+StorageClass.AUTO = StorageClass(6)
+StorageClass.REGISTER = StorageClass(7)
+
+
+### C++ access specifiers ###
+
+class AccessSpecifier(BaseEnumeration):
+    """
+    Describes the access of a C++ class member
+    """
+
+    # The unique kind objects, index by id.
+    _kinds = []
+    _name_map = None
+
+    def from_param(self):
+        return self.value
+
+    def __repr__(self):
+        return 'AccessSpecifier.%s' % (self.name,)
+
+AccessSpecifier.INVALID = AccessSpecifier(0)
+AccessSpecifier.PUBLIC = AccessSpecifier(1)
+AccessSpecifier.PROTECTED = AccessSpecifier(2)
+AccessSpecifier.PRIVATE = AccessSpecifier(3)
+AccessSpecifier.NONE = AccessSpecifier(4)
+
+class StorageClass(object):
+    """
+    Describes the storage class of a declaration
+    """
+
+    # The unique kind objects, index by id.
+    _kinds = []
+    _name_map = None
+
+    def __init__(self, value):
+        if value >= len(StorageClass._kinds):
+            StorageClass._kinds += [None] * (value - len(StorageClass._kinds) + 1)
+        if StorageClass._kinds[value] is not None:
+            raise ValueError ('StorageClass already loaded')
+        self.value = value
+        StorageClass._kinds[value] = self
+        StorageClass._name_map = None
+
+    def from_param(self):
+        return self.value
+
+    @property
+    def name(self):
+        """Get the enumeration name of this storage class."""
+        if self._name_map is None:
+            self._name_map = {}
+            for key,value in StorageClass.__dict__.items():
+                if isinstance(value,StorageClass):
+                    self._name_map[value] = key
+        return self._name_map[self]
+
+    @staticmethod
+    def from_id(id):
+        if id >= len(StorageClass._kinds) or not StorageClass._kinds[id]:
+            raise ValueError ('Unknown storage class %d' % id)
         return StorageClass._kinds[id]
 
     def __repr__(self):
@@ -1692,6 +1805,21 @@ class TypeKind(BaseEnumeration):
     # The unique kind objects, indexed by id.
     _kinds = []
     _name_map = None
+
+    def get_fields(self):
+        """Return an iterator for accessing the fields of this type."""
+
+        def visitor(field, children):
+            assert field != conf.lib.clang_getNullCursor()
+
+            # Create reference to TU so it isn't GC'd before Cursor.
+            field._tu = self._tu
+            fields.append(field)
+            return 1 # continue
+        fields = []
+        conf.lib.clang_Type_visitFields(self,
+                            callbacks['fields_visit'](visitor), fields)
+        return iter(fields)
 
     @property
     def spelling(self):
@@ -1760,8 +1888,35 @@ class RefQualifierKind(BaseEnumeration):
     _kinds = []
     _name_map = None
 
+    def __init__(self, value):
+        if value >= len(RefQualifierKind._kinds):
+            num_kinds = value - len(RefQualifierKind._kinds) + 1
+            RefQualifierKind._kinds += [None] * num_kinds
+        if RefQualifierKind._kinds[value] is not None:
+            raise ValueError('RefQualifierKind already loaded')
+        self.value = value
+        RefQualifierKind._kinds[value] = self
+        RefQualifierKind._name_map = None
+
     def from_param(self):
         return self.value
+
+    @property
+    def name(self):
+        """Get the enumeration name of this kind."""
+        if self._name_map is None:
+            self._name_map = {}
+            for key, value in RefQualifierKind.__dict__.items():
+                if isinstance(value, RefQualifierKind):
+                    self._name_map[value] = key
+        return self._name_map[self]
+
+    @staticmethod
+    def from_id(id):
+        if (id >= len(RefQualifierKind._kinds) or
+                RefQualifierKind._kinds[id] is None):
+            raise ValueError ('Unknown type kind %d' % id)
+        return RefQualifierKind._kinds[id]
 
     def __repr__(self):
         return 'RefQualifierKind.%s' % (self.name,)
@@ -1972,7 +2127,7 @@ class Type(Structure):
         """
         Retrieve the offset of a field in the record.
         """
-        return conf.lib.clang_Type_getOffsetOf(self, c_char_p(fieldname))
+        return conf.lib.clang_Type_getOffsetOf(self, c_char_p(fieldname.encode ('utf-8')))
 
     def get_ref_qualifier(self):
         """
@@ -2386,7 +2541,9 @@ class TranslationUnit(ClangObject):
 
         args_array = None
         if len(args) > 0:
-            args_array = (c_char_p * len(args))(* args)
+            args_array = (c_char_p * len(args))()
+            for i,v in enumerate(args):
+                args_array [i] = v.encode ('utf-8')
 
         unsaved_array = None
         if len(unsaved_files) > 0:
@@ -2395,13 +2552,17 @@ class TranslationUnit(ClangObject):
                 if hasattr(contents, "read"):
                     contents = contents.read()
 
-                unsaved_array[i].name = name
-                unsaved_array[i].contents = contents
+                unsaved_array[i].name = name.encode ('utf-8')
+                unsaved_array[i].contents = contents.encode ('utf-8')
                 unsaved_array[i].length = len(contents)
 
-        ptr = conf.lib.clang_parseTranslationUnit(index, filename, args_array,
-                                    len(args), unsaved_array,
-                                    len(unsaved_files), options)
+        if filename is not None:
+            filename = filename.encode ('utf-8')
+
+        ptr = conf.lib.clang_parseTranslationUnit(index,
+            filename, args_array,
+            len(args), unsaved_array,
+            len(unsaved_files), options)
 
         if not ptr:
             raise TranslationUnitLoadError("Error parsing translation unit.")
@@ -2424,7 +2585,7 @@ class TranslationUnit(ClangObject):
         if index is None:
             index = Index.create()
 
-        ptr = conf.lib.clang_createTranslationUnit(index, filename)
+        ptr = conf.lib.clang_createTranslationUnit(index, filename.encode ('utf-8'))
         if not ptr:
             raise TranslationUnitLoadError(filename)
 
@@ -2574,11 +2735,11 @@ class TranslationUnit(ClangObject):
                     # FIXME: It would be great to support an efficient version
                     # of this, one day.
                     value = value.read()
-                    print value
+                    print(value)
                 if not isinstance(value, str):
-                    raise TypeError,'Unexpected unsaved file contents.'
-                unsaved_files_array[i].name = name
-                unsaved_files_array[i].contents = value
+                    raise TypeError('Unexpected unsaved file contents.')
+                unsaved_files_array[i].name = name.encode ('utf-8')
+                unsaved_files_array[i].contents = value.encode ('utf-8')
                 unsaved_files_array[i].length = len(value)
         ptr = conf.lib.clang_reparseTranslationUnit(self, len(unsaved_files),
                 unsaved_files_array, options)
@@ -2599,7 +2760,7 @@ class TranslationUnit(ClangObject):
         filename -- The path to save the translation unit to.
         """
         options = conf.lib.clang_defaultSaveOptions(self)
-        result = int(conf.lib.clang_saveTranslationUnit(self, filename,
+        result = int(conf.lib.clang_saveTranslationUnit(self, filename.encode ('utf-8'),
                                                         options))
         if result != 0:
             raise TranslationUnitSaveError(result,
@@ -2638,13 +2799,13 @@ class TranslationUnit(ClangObject):
                     # FIXME: It would be great to support an efficient version
                     # of this, one day.
                     value = value.read()
-                    print value
+                    print(value)
                 if not isinstance(value, str):
-                    raise TypeError,'Unexpected unsaved file contents.'
-                unsaved_files_array[i].name = name
-                unsaved_files_array[i].contents = value
+                    raise TypeError('Unexpected unsaved file contents.')
+                unsaved_files_array[i].name = name.encode ('utf-8')
+                unsaved_files_array[i].contents = value.encode('utf-8')
                 unsaved_files_array[i].length = len(value)
-        ptr = conf.lib.clang_codeCompleteAt(self, path, line, column,
+        ptr = conf.lib.clang_codeCompleteAt(self, path.encode ('utf-8'), line, column,
                 unsaved_files_array, len(unsaved_files), options)
         if ptr:
             return CodeCompletionResults(ptr)
@@ -2672,12 +2833,12 @@ class File(ClangObject):
     @staticmethod
     def from_name(translation_unit, file_name):
         """Retrieve a file handle within the given translation unit."""
-        return File(conf.lib.clang_getFile(translation_unit, file_name))
+        return File(conf.lib.clang_getFile(translation_unit, file_name.encode ('utf-8')))
 
     @property
     def name(self):
         """Return the complete file and path name of the file."""
-        return conf.lib.clang_getCString(conf.lib.clang_getFileName(self))
+        return conf.lib.clang_getCString(conf.lib.clang_getFileName(self)).decode ('utf-8')
 
     @property
     def time(self):
@@ -2770,7 +2931,7 @@ class CompileCommand(object):
         Invariant : the first argument is the compiler executable
         """
         length = conf.lib.clang_CompileCommand_getNumArgs(self.cmd)
-        for i in xrange(length):
+        for i in range(length):
             yield conf.lib.clang_CompileCommand_getArg(self.cmd, i)
 
 class CompileCommands(object):
@@ -2822,7 +2983,7 @@ class CompilationDatabase(ClangObject):
         """Builds a CompilationDatabase from the database found in buildDir"""
         errorCode = c_uint()
         try:
-            cdb = conf.lib.clang_CompilationDatabase_fromDirectory(buildDir,
+            cdb = conf.lib.clang_CompilationDatabase_fromDirectory(buildDir.encode ('utf-8'),
                 byref(errorCode))
         except CompilationDatabaseError as e:
             raise CompilationDatabaseError(int(errorCode.value),
@@ -2835,7 +2996,8 @@ class CompilationDatabase(ClangObject):
         build filename. Returns None if filename is not found in the database.
         """
         return conf.lib.clang_CompilationDatabase_getCompileCommands(self,
-                                                                     filename)
+                                                                     filename.encode ('utf-8'))
+
 
     def getAllCompileCommands(self):
         """
